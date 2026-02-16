@@ -1,0 +1,17 @@
+{
+  "name": "tbdp-freeplanexpiry",
+  "version": "1.0.0",
+  "description": "Daily cron job to warn and expire free plan users after 6 months",
+  "main": "src/main.js",
+  "type": "module",
+  "scripts": {
+    "format": "prettier --write ."
+  },
+  "dependencies": {
+    "node-appwrite": "^14.1.0",
+    "resend": "^3.2.0"
+  },
+  "devDependencies": {
+    "prettier": "^3.2.5"
+  }
+}
