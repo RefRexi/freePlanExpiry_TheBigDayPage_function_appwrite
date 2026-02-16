@@ -5,6 +5,7 @@
   "main": "src/main.js",
   "type": "module",
   "scripts": {
+    "build": "true",
     "format": "prettier --write ."
   },
   "dependencies": {
