@@ -1,4 +1,4 @@
-import sdk from "node-appwrite";
+import { Client, Databases, Users, Query } from "node-appwrite";
 import { Resend } from "resend";
 
 const FREE_PLAN_DURATION_DAYS = 183; // ~6 months
@@ -8,13 +8,13 @@ const MEDIA_GRACE_PERIOD_DAYS = 183; // 6 months grace before media deletion
 const BATCH_SIZE = 100;
 
 export default async function main(context) {
-  const client = new sdk.Client()
+  const client = new Client()
     .setEndpoint(process.env.APPWRITE_ENDPOINT)
     .setProject(process.env.APPWRITE_PROJECT_ID)
     .setKey(process.env.APPWRITE_API_KEY);
 
-  const databases = new sdk.Databases(client);
-  const users = new sdk.Users(client);
+  const databases = new Databases(client);
+  const users = new Users(client);
   const resend = new Resend(process.env.RESEND_API_KEY);
 
   const DB_ID = process.env.APPWRITE_DATABASE_ID;
@@ -44,8 +44,8 @@ export default async function main(context) {
         SYSTEM_DB_ID,
         MAIL_TEMPLATES_COLLECTION_ID,
         [
-          sdk.Query.equal("name", "free-plan-expiring"),
-          sdk.Query.equal("language", "en"),
+          Query.equal("name", "free-plan-expiring"),
+          Query.equal("language", "en"),
         ]
       );
       if (templateRes.documents.length > 0) {
@@ -60,11 +60,11 @@ export default async function main(context) {
 
     while (hasMore) {
       const batch = await databases.listDocuments(DB_ID, USER_COLLECTION_ID, [
-        sdk.Query.equal("plan", "free"),
-        sdk.Query.lessThanEqual("planStarted", warningCutoffISO),
-        sdk.Query.isNull("freeExpiryWarnedAt"),
-        sdk.Query.limit(BATCH_SIZE),
-        sdk.Query.offset(offset),
+        Query.equal("plan", "free"),
+        Query.lessThanEqual("planStarted", warningCutoffISO),
+        Query.isNull("freeExpiryWarnedAt"),
+        Query.limit(BATCH_SIZE),
+        Query.offset(offset),
       ]);
 
       for (const userDoc of batch.documents) {
@@ -173,8 +173,8 @@ export default async function main(context) {
         SYSTEM_DB_ID,
         MAIL_TEMPLATES_COLLECTION_ID,
         [
-          sdk.Query.equal("name", "free-plan-expired"),
-          sdk.Query.equal("language", "en"),
+          Query.equal("name", "free-plan-expired"),
+          Query.equal("language", "en"),
         ]
       );
       if (templateRes.documents.length > 0) {
@@ -189,11 +189,11 @@ export default async function main(context) {
 
     while (hasMore) {
       const batch = await databases.listDocuments(DB_ID, USER_COLLECTION_ID, [
-        sdk.Query.equal("plan", "free"),
-        sdk.Query.lessThanEqual("planStarted", expiryCutoffISO),
-        sdk.Query.notEqual("subscriptionStatus", "free_expired"),
-        sdk.Query.limit(BATCH_SIZE),
-        sdk.Query.offset(offset),
+        Query.equal("plan", "free"),
+        Query.lessThanEqual("planStarted", expiryCutoffISO),
+        Query.notEqual("subscriptionStatus", "free_expired"),
+        Query.limit(BATCH_SIZE),
+        Query.offset(offset),
       ]);
 
       for (const userDoc of batch.documents) {
