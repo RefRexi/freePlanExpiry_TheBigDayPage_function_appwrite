@@ -1,4 +1,4 @@
-import { Client, Databases, Users, Query } from "node-appwrite";
+import { Client, Databases, Users, Query, ID } from "node-appwrite";
 import { Resend } from "resend";
 
 const FREE_PLAN_DURATION_DAYS = 183; // ~6 months
@@ -21,7 +21,17 @@ export default async function main(context) {
   const USER_COLLECTION_ID = process.env.APPWRITE_USER_COLLECTION_ID;
   const SYSTEM_DB_ID = process.env.SYSTEM_DB_ID;
   const MAIL_TEMPLATES_COLLECTION_ID = process.env.MAIL_TEMPLATES_COLLECTION_ID;
+  const LOGS_COLLECTION_ID = process.env.APPWRITE_FUNCTION_LOGS_COLLECTION_ID;
   const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://thebigdaypage.com";
+
+  const writeLog = async (entry) => {
+    if (!LOGS_COLLECTION_ID || !DB_ID) return;
+    try {
+      await databases.createDocument(DB_ID, LOGS_COLLECTION_ID, ID.unique(), entry);
+    } catch (err) {
+      context.error(`Failed to write log entry: ${err.message}`);
+    }
+  };
 
   const now = new Date();
 
@@ -142,6 +152,13 @@ export default async function main(context) {
             { freeExpiryWarnedAt: now.toISOString() }
           );
 
+          await writeLog({
+            functionName: "tbdp-freeplanexpiry",
+            action: "warning_sent",
+            userId: userDoc.userId,
+            details: `14-day expiry warning email sent. Plan expires ${expiryDate.toISOString()}.`,
+          });
+
           warnedCount++;
         } catch (err) {
           context.error(
@@ -192,6 +209,7 @@ export default async function main(context) {
         Query.equal("plan", "free"),
         Query.lessThanEqual("planStarted", expiryCutoffISO),
         Query.notEqual("subscriptionStatus", "free_expired"),
+        Query.notEqual("subscriptionStatus", "archived"),
         Query.limit(BATCH_SIZE),
         Query.offset(offset),
       ]);
@@ -216,6 +234,13 @@ export default async function main(context) {
           );
 
           context.log(`Expired free plan for user ${userDoc.userId}`);
+
+          await writeLog({
+            functionName: "tbdp-freeplanexpiry",
+            action: "plan_expired",
+            userId: userDoc.userId,
+            details: `Free plan expired. Media scheduled for deletion on ${deleteMediaDate.toISOString()}.`,
+          });
 
           // Send expiry notification email
           if (expiryTemplate) {
