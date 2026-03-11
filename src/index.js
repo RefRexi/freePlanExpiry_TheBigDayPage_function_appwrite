@@ -4,7 +4,9 @@ import { Resend } from "resend";
 const FREE_PLAN_DURATION_DAYS = 183; // ~6 months
 const WARNING_DAYS_BEFORE = 14;
 const WARNING_CUTOFF_DAYS = FREE_PLAN_DURATION_DAYS - WARNING_DAYS_BEFORE; // 169 days
-const MEDIA_GRACE_PERIOD_DAYS = 183; // 6 months grace before media deletion
+// Must match docs/media-deletion-policy.md §Grace Period Matrix exactly.
+const DELETION_REASON_FREE_EXPIRED = 'free_expired';   // reason value
+const FREE_PLAN_MEDIA_GRACE_DAYS   = 183;              // grace days for free_expired
 const BATCH_SIZE = 100;
 
 export default async function main(context) {
@@ -216,20 +218,21 @@ export default async function main(context) {
 
       for (const userDoc of batch.documents) {
         try {
-          // Calculate media deletion date (6 months grace)
-          const deleteMediaDate = new Date(now);
-          deleteMediaDate.setDate(
-            deleteMediaDate.getDate() + MEDIA_GRACE_PERIOD_DAYS
-          );
+          // Calculate media deletion date
+          const deleteAt = new Date(now);
+          deleteAt.setDate(deleteAt.getDate() + FREE_PLAN_MEDIA_GRACE_DAYS);
 
-          // Update user status
+          // Update user status with full scheduling metadata
           await databases.updateDocument(
             DB_ID,
             USER_COLLECTION_ID,
             userDoc.$id,
             {
-              subscriptionStatus: "free_expired",
-              deleteMedia: deleteMediaDate.toISOString(),
+              subscriptionStatus:     'free_expired',
+              deleteMedia:            deleteAt.toISOString(),
+              deleteMediaReason:      DELETION_REASON_FREE_EXPIRED,
+              deleteMediaScheduledAt: now.toISOString(),
+              deleteMediaGraceDays:   FREE_PLAN_MEDIA_GRACE_DAYS,
             }
           );
 
@@ -239,7 +242,7 @@ export default async function main(context) {
             functionName: "tbdp-freeplanexpiry",
             action: "plan_expired",
             userId: userDoc.userId,
-            details: `Free plan expired. Media scheduled for deletion on ${deleteMediaDate.toISOString()}.`,
+            details: `Free plan expired. Reason: ${DELETION_REASON_FREE_EXPIRED}. Media scheduled for deletion on ${deleteAt.toISOString()} (grace: ${FREE_PLAN_MEDIA_GRACE_DAYS} days).`,
           });
 
           // Send expiry notification email
