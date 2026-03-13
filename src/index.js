@@ -65,6 +65,12 @@ export default async function main(context) {
       }
     } catch (err) {
       context.error(`Failed to fetch warning email template: ${err.message}`);
+      await writeLog({
+        functionName: "tbdp-freeplanexpiry",
+        action: "error",
+        userId: null,
+        details: `Failed to fetch warning email template: ${err.message}`,
+      });
     }
 
     let offset = 0;
@@ -99,6 +105,12 @@ export default async function main(context) {
             context.error(
               `Failed to fetch user ${userDoc.userId}: ${err.message}`
             );
+            await writeLog({
+              functionName: "tbdp-freeplanexpiry",
+              action: "error",
+              userId: userDoc.userId,
+              details: `Failed to fetch user account for warning job: ${err.message}`,
+            });
             errorCount++;
             continue;
           }
@@ -137,13 +149,27 @@ export default async function main(context) {
               context.error(
                 `Failed to send warning email to ${userEmail}: ${emailErr.message}`
               );
+              await writeLog({
+                functionName: "tbdp-freeplanexpiry",
+                action: "error",
+                userId: userDoc.userId,
+                details: `Failed to send warning email to ${userEmail}: ${emailErr.message}`,
+              });
               errorCount++;
               continue;
             }
           } else {
             context.log(
-              `No warning template found, skipping email for ${userEmail}`
+              `No warning template found, skipping warning for user ${userDoc.userId}`
             );
+            await writeLog({
+              functionName: "tbdp-freeplanexpiry",
+              action: "error",
+              userId: userDoc.userId,
+              details: `Warning email skipped: no 'free-plan-expiring' template found. freeExpiryWarnedAt not set.`,
+            });
+            errorCount++;
+            continue;
           }
 
           // Mark as warned
@@ -166,6 +192,12 @@ export default async function main(context) {
           context.error(
             `Error processing warning for user ${userDoc.userId}: ${err.message}`
           );
+          await writeLog({
+            functionName: "tbdp-freeplanexpiry",
+            action: "error",
+            userId: userDoc.userId,
+            details: `Unhandled error in warning job: ${err.message}`,
+          });
           errorCount++;
         }
       }
@@ -175,6 +207,12 @@ export default async function main(context) {
     }
   } catch (err) {
     context.error(`Warning job failed: ${err.message}`);
+    await writeLog({
+      functionName: "tbdp-freeplanexpiry",
+      action: "error",
+      userId: null,
+      details: `Warning job failed (outer catch): ${err.message}`,
+    });
   }
 
   // ─── Job 2: Expire free plans ───
@@ -201,6 +239,12 @@ export default async function main(context) {
       }
     } catch (err) {
       context.error(`Failed to fetch expiry email template: ${err.message}`);
+      await writeLog({
+        functionName: "tbdp-freeplanexpiry",
+        action: "error",
+        userId: null,
+        details: `Failed to fetch expiry email template: ${err.message}`,
+      });
     }
 
     let offset = 0;
@@ -254,6 +298,12 @@ export default async function main(context) {
               context.error(
                 `Failed to fetch user ${userDoc.userId} for expiry email: ${err.message}`
               );
+              await writeLog({
+                functionName: "tbdp-freeplanexpiry",
+                action: "error",
+                userId: userDoc.userId,
+                details: `Failed to fetch user account for expiry email: ${err.message}`,
+              });
               expiredCount++;
               continue;
             }
@@ -282,6 +332,12 @@ export default async function main(context) {
                 context.error(
                   `Failed to send expiry email to ${userEmail}: ${emailErr.message}`
                 );
+                await writeLog({
+                  functionName: "tbdp-freeplanexpiry",
+                  action: "error",
+                  userId: userDoc.userId,
+                  details: `Failed to send expiry email to ${userEmail}: ${emailErr.message}`,
+                });
               }
             }
           }
@@ -291,6 +347,12 @@ export default async function main(context) {
           context.error(
             `Error expiring user ${userDoc.userId}: ${err.message}`
           );
+          await writeLog({
+            functionName: "tbdp-freeplanexpiry",
+            action: "error",
+            userId: userDoc.userId,
+            details: `Unhandled error in expiry job: ${err.message}`,
+          });
           errorCount++;
         }
       }
@@ -300,6 +362,12 @@ export default async function main(context) {
     }
   } catch (err) {
     context.error(`Expiry job failed: ${err.message}`);
+    await writeLog({
+      functionName: "tbdp-freeplanexpiry",
+      action: "error",
+      userId: null,
+      details: `Expiry job failed (outer catch): ${err.message}`,
+    });
   }
 
   const summary = {
