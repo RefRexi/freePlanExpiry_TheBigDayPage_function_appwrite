@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "build": "true",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "test": "node --test"
   },
   "dependencies": {
     "node-appwrite": "^14.1.0",

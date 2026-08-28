@@ -1,5 +1,13 @@
 import { Client, Databases, Users, Query, ID } from "node-appwrite";
 import { Resend } from "resend";
+import {
+  resolveMailLocale,
+  formatMailDate,
+  localizedPath,
+  greetingFallback,
+  applyPlaceholders,
+  createTemplateLoader,
+} from "./mailLocale.js";
 
 const FREE_PLAN_DURATION_DAYS = 183; // ~6 months
 const WARNING_DAYS_BEFORE = 14;
@@ -35,6 +43,17 @@ export default async function main(context) {
     }
   };
 
+  // Phase 7b: mail templates are resolved per user language (userData.language
+  // clamped to the market locales) with the English row as fallback; cached per
+  // (name, language) for this run.
+  const loadTemplate = createTemplateLoader(async (name, language) => {
+    const res = await databases.listDocuments(SYSTEM_DB_ID, MAIL_TEMPLATES_COLLECTION_ID, [
+      Query.equal("name", name),
+      Query.equal("language", language),
+    ]);
+    return res.documents[0] || null;
+  });
+
   const now = new Date();
 
   let warnedCount = 0;
@@ -49,29 +68,7 @@ export default async function main(context) {
 
     context.log(`[Warning] Checking users with planStarted <= ${warningCutoffISO}`);
 
-    // Fetch the warning email template
-    let warningTemplate = null;
-    try {
-      const templateRes = await databases.listDocuments(
-        SYSTEM_DB_ID,
-        MAIL_TEMPLATES_COLLECTION_ID,
-        [
-          Query.equal("name", "free-plan-expiring"),
-          Query.equal("language", "en"),
-        ]
-      );
-      if (templateRes.documents.length > 0) {
-        warningTemplate = templateRes.documents[0];
-      }
-    } catch (err) {
-      context.error(`Failed to fetch warning email template: ${err.message}`);
-      await writeLog({
-        functionName: "tbdp-freeplanexpiry",
-        action: "error",
-        userId: null,
-        details: `Failed to fetch warning email template: ${err.message}`,
-      });
-    }
+    // The warning template is resolved per user (language) inside the loop.
 
     let offset = 0;
     let hasMore = true;
@@ -115,7 +112,8 @@ export default async function main(context) {
             continue;
           }
 
-          const userName = userAccount.name || "there";
+          const language = resolveMailLocale(userDoc.language);
+          const userName = userAccount.name || greetingFallback(language);
           const userEmail = userAccount.email;
 
           if (!userEmail) {
@@ -125,17 +123,28 @@ export default async function main(context) {
             continue;
           }
 
-          // Send warning email
+          // Send warning email in the user's language (English row as fallback)
+          let warningTemplate = null;
+          try {
+            warningTemplate = await loadTemplate("free-plan-expiring", language);
+          } catch (err) {
+            context.error(`Failed to fetch warning email template (${language}): ${err.message}`);
+            await writeLog({
+              functionName: "tbdp-freeplanexpiry",
+              action: "error",
+              userId: userDoc.userId,
+              details: `Failed to fetch warning email template (${language}): ${err.message}`,
+            });
+          }
           if (warningTemplate) {
-            const subject = (warningTemplate.subject || "Your free plan expires in 14 days")
-              .replace(/\{\{name\}\}/g, userName)
-              .replace(/\{\{expiryDate\}\}/g, expiryDate.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }))
-              .replace(/\{\{upgradeUrl\}\}/g, `${SITE_URL}/plans`);
-
-            const htmlBody = (warningTemplate.bodyHtml || "")
-              .replace(/\{\{name\}\}/g, userName)
-              .replace(/\{\{expiryDate\}\}/g, expiryDate.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }))
-              .replace(/\{\{upgradeUrl\}\}/g, `${SITE_URL}/plans`);
+            const values = {
+              name: userName,
+              expiryDate: formatMailDate(expiryDate, language),
+              upgradeUrl: `${SITE_URL}${localizedPath(language, "/plans")}`,
+            };
+            const subject = applyPlaceholders(warningTemplate.subject || "Your free plan expires in 14 days", values);
+            const htmlBody = applyPlaceholders(warningTemplate.bodyHtml || "", values);
+            const textBody = warningTemplate.bodyPlain ? applyPlaceholders(warningTemplate.bodyPlain, values) : undefined;
 
             try {
               await resend.emails.send({
@@ -143,6 +152,7 @@ export default async function main(context) {
                 to: [userEmail],
                 subject,
                 html: htmlBody,
+                ...(textBody ? { text: textBody } : {}),
               });
               context.log(`Warning email sent to ${userEmail}`);
             } catch (emailErr) {
@@ -223,29 +233,7 @@ export default async function main(context) {
 
     context.log(`[Expiry] Checking users with planStarted <= ${expiryCutoffISO}`);
 
-    // Fetch the expiry email template
-    let expiryTemplate = null;
-    try {
-      const templateRes = await databases.listDocuments(
-        SYSTEM_DB_ID,
-        MAIL_TEMPLATES_COLLECTION_ID,
-        [
-          Query.equal("name", "free-plan-expired"),
-          Query.equal("language", "en"),
-        ]
-      );
-      if (templateRes.documents.length > 0) {
-        expiryTemplate = templateRes.documents[0];
-      }
-    } catch (err) {
-      context.error(`Failed to fetch expiry email template: ${err.message}`);
-      await writeLog({
-        functionName: "tbdp-freeplanexpiry",
-        action: "error",
-        userId: null,
-        details: `Failed to fetch expiry email template: ${err.message}`,
-      });
-    }
+    // The expiry template is resolved per user (language) inside the loop.
 
     let offset = 0;
     let hasMore = true;
@@ -289,7 +277,20 @@ export default async function main(context) {
             details: `Free plan expired. Reason: ${DELETION_REASON_FREE_EXPIRED}. Media scheduled for deletion on ${deleteAt.toISOString()} (grace: ${FREE_PLAN_MEDIA_GRACE_DAYS} days).`,
           });
 
-          // Send expiry notification email
+          // Send expiry notification email in the user's language (English row as fallback)
+          const language = resolveMailLocale(userDoc.language);
+          let expiryTemplate = null;
+          try {
+            expiryTemplate = await loadTemplate("free-plan-expired", language);
+          } catch (err) {
+            context.error(`Failed to fetch expiry email template (${language}): ${err.message}`);
+            await writeLog({
+              functionName: "tbdp-freeplanexpiry",
+              action: "error",
+              userId: userDoc.userId,
+              details: `Failed to fetch expiry email template (${language}): ${err.message}`,
+            });
+          }
           if (expiryTemplate) {
             let userAccount;
             try {
@@ -308,17 +309,17 @@ export default async function main(context) {
               continue;
             }
 
-            const userName = userAccount.name || "there";
+            const userName = userAccount.name || greetingFallback(language);
             const userEmail = userAccount.email;
 
             if (userEmail) {
-              const subject = (expiryTemplate.subject || "Your free plan has expired")
-                .replace(/\{\{name\}\}/g, userName)
-                .replace(/\{\{upgradeUrl\}\}/g, `${SITE_URL}/plans`);
-
-              const htmlBody = (expiryTemplate.bodyHtml || "")
-                .replace(/\{\{name\}\}/g, userName)
-                .replace(/\{\{upgradeUrl\}\}/g, `${SITE_URL}/plans`);
+              const values = {
+                name: userName,
+                upgradeUrl: `${SITE_URL}${localizedPath(language, "/plans")}`,
+              };
+              const subject = applyPlaceholders(expiryTemplate.subject || "Your free plan has expired", values);
+              const htmlBody = applyPlaceholders(expiryTemplate.bodyHtml || "", values);
+              const textBody = expiryTemplate.bodyPlain ? applyPlaceholders(expiryTemplate.bodyPlain, values) : undefined;
 
               try {
                 await resend.emails.send({
@@ -326,6 +327,7 @@ export default async function main(context) {
                   to: [userEmail],
                   subject,
                   html: htmlBody,
+                  ...(textBody ? { text: textBody } : {}),
                 });
                 context.log(`Expiry email sent to ${userEmail}`);
               } catch (emailErr) {
