@@ -1,11 +1,11 @@
 /**
  * Mail-language helpers (language directive Phase 7b) — pure, no Appwrite.
  *
- * Mails go out in the six market locales; anything else falls back to English,
+ * Mails go out in the seven market locales; anything else falls back to English,
  * mirroring thebigdaypage/src/lib/mailLocale.ts. Template rows are looked up per
  * (name, language) with the English row as fallback.
  */
-export const MAIL_LOCALES = ["en", "de", "sq", "mk", "tr", "ar"];
+export const MAIL_LOCALES = ["en", "de", "sq", "mk", "tr", "ar", "bs"];
 
 /** Clamp userData.language (any BCP-47-ish value) to a supported mail locale. */
 export function resolveMailLocale(raw) {
@@ -30,7 +30,7 @@ export function localizedPath(locale, path) {
 }
 
 /** Salutation when the account has no name ("Hi there," in English). */
-const GREETING_FALLBACK = { en: "there", de: "ihr zwei", sq: "të dashur", mk: "драги", tr: "sevgili çift", ar: "أعزاءنا" };
+const GREETING_FALLBACK = { en: "there", de: "ihr zwei", sq: "të dashur", mk: "драги", tr: "sevgili çift", ar: "أعزاءنا", bs: "dragi" };
 export function greetingFallback(locale) {
   return GREETING_FALLBACK[locale] || GREETING_FALLBACK.en;
 }
