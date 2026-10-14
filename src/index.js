@@ -17,6 +17,13 @@ const DELETION_REASON_FREE_EXPIRED = 'free_expired';   // reason value
 const FREE_PLAN_MEDIA_GRACE_DAYS   = 183;              // grace days for free_expired
 const BATCH_SIZE = 100;
 
+// resend (v3 and v6 alike) does not throw on API or network failures; it
+// resolves { data: null, error }. Turn that into a thrown Error so the existing
+// catch blocks log it and the warning is not marked as sent.
+function resendError(err) {
+  return new Error(`Resend error (${err.name || "unknown"}): ${err.message || "no message"}`);
+}
+
 export default async function main(context) {
   const client = new Client()
     .setEndpoint(process.env.APPWRITE_ENDPOINT)
@@ -147,13 +154,15 @@ export default async function main(context) {
             const textBody = warningTemplate.bodyPlain ? applyPlaceholders(warningTemplate.bodyPlain, values) : undefined;
 
             try {
-              await resend.emails.send({
+              const { error: sendError } = await resend.emails.send({
                 from: "TheBigDayPage <noreply@thebigdaypage.com>",
                 to: [userEmail],
                 subject,
                 html: htmlBody,
                 ...(textBody ? { text: textBody } : {}),
               });
+              // resend resolves API/network failures as { error } instead of throwing.
+              if (sendError) throw resendError(sendError);
               context.log(`Warning email sent to ${userEmail}`);
             } catch (emailErr) {
               context.error(
@@ -322,13 +331,14 @@ export default async function main(context) {
               const textBody = expiryTemplate.bodyPlain ? applyPlaceholders(expiryTemplate.bodyPlain, values) : undefined;
 
               try {
-                await resend.emails.send({
+                const { error: sendError } = await resend.emails.send({
                   from: "TheBigDayPage <noreply@thebigdaypage.com>",
                   to: [userEmail],
                   subject,
                   html: htmlBody,
                   ...(textBody ? { text: textBody } : {}),
                 });
+                if (sendError) throw resendError(sendError);
                 context.log(`Expiry email sent to ${userEmail}`);
               } catch (emailErr) {
                 context.error(
