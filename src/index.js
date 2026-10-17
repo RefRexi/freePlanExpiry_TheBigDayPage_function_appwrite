@@ -8,6 +8,7 @@ import {
   applyPlaceholders,
   createTemplateLoader,
 } from "./mailLocale.js";
+import { readRetentionTerms, replyToOf, templateNameFor } from "./retentionTerms.js";
 
 const FREE_PLAN_DURATION_DAYS = 183; // ~6 months
 const WARNING_DAYS_BEFORE = 14;
@@ -62,6 +63,23 @@ export default async function main(context) {
   });
 
   const now = new Date();
+
+  // Terms v2 gate: accounts on the v2 Terms get the -v2 mails (whole account deleted at the
+  // end of the grace period). An unparseable TERMS_V2_* value stops the run: better no mail
+  // than one that misstates what will be deleted.
+  let retentionTerms;
+  try {
+    retentionTerms = readRetentionTerms(process.env);
+  } catch (err) {
+    context.error(`Retention terms config invalid: ${err.message}`);
+    await writeLog({
+      functionName: "tbdp-freeplanexpiry",
+      action: "error",
+      userId: null,
+      details: `Retention terms config invalid (${err.message}); no mails sent, no plans expired.`,
+    });
+    return context.res.json({ success: false, error: `retention terms config invalid: ${err.message}` });
+  }
 
   let warnedCount = 0;
   let expiredCount = 0;
@@ -133,7 +151,7 @@ export default async function main(context) {
           // Send warning email in the user's language (English row as fallback)
           let warningTemplate = null;
           try {
-            warningTemplate = await loadTemplate("free-plan-expiring", language);
+            warningTemplate = await loadTemplate(templateNameFor("free-plan-expiring", userDoc, now, retentionTerms), language);
           } catch (err) {
             context.error(`Failed to fetch warning email template (${language}): ${err.message}`);
             await writeLog({
@@ -160,6 +178,7 @@ export default async function main(context) {
                 subject,
                 html: htmlBody,
                 ...(textBody ? { text: textBody } : {}),
+                ...replyToOf(warningTemplate),
               });
               // resend resolves API/network failures as { error } instead of throwing.
               if (sendError) throw resendError(sendError);
@@ -185,7 +204,7 @@ export default async function main(context) {
               functionName: "tbdp-freeplanexpiry",
               action: "error",
               userId: userDoc.userId,
-              details: `Warning email skipped: no 'free-plan-expiring' template found. freeExpiryWarnedAt not set.`,
+              details: `Warning email skipped: no '${templateNameFor("free-plan-expiring", userDoc, now, retentionTerms)}' template found. freeExpiryWarnedAt not set.`,
             });
             errorCount++;
             continue;
@@ -290,7 +309,7 @@ export default async function main(context) {
           const language = resolveMailLocale(userDoc.language);
           let expiryTemplate = null;
           try {
-            expiryTemplate = await loadTemplate("free-plan-expired", language);
+            expiryTemplate = await loadTemplate(templateNameFor("free-plan-expired", userDoc, now, retentionTerms), language);
           } catch (err) {
             context.error(`Failed to fetch expiry email template (${language}): ${err.message}`);
             await writeLog({
@@ -337,6 +356,7 @@ export default async function main(context) {
                   subject,
                   html: htmlBody,
                   ...(textBody ? { text: textBody } : {}),
+                  ...replyToOf(expiryTemplate),
                 });
                 if (sendError) throw resendError(sendError);
                 context.log(`Expiry email sent to ${userEmail}`);
