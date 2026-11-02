@@ -148,6 +148,11 @@ export async function runFreePlanExpiry(context, { databases, users, resend, now
     return "done";
   };
 
+  // Both jobs leave an account alone once it has a deletion date. A paid plan that ended is on
+  // plan "free" with the planStarted of that plan, usually older than the free period, but it
+  // has its own date (refund and lost dispute 30 days, cancellation from the period end).
+  // Pages go by cursor: handling a row takes it out of the query, an offset would skip rows.
+
   // ─── Job 1: Send 14-day warning emails ───
   try {
     const warningCutoff = new Date(now);
@@ -158,7 +163,7 @@ export async function runFreePlanExpiry(context, { databases, users, resend, now
 
     // The warning template is resolved per user (language) inside the loop.
 
-    let offset = 0;
+    let cursor = null;
     let hasMore = true;
 
     while (hasMore) {
@@ -166,8 +171,9 @@ export async function runFreePlanExpiry(context, { databases, users, resend, now
         Query.equal("plan", "free"),
         Query.lessThanEqual("planStarted", warningCutoffISO),
         Query.isNull("freeExpiryWarnedAt"),
+        Query.isNull("deleteMedia"),
         Query.limit(BATCH_SIZE),
-        Query.offset(offset),
+        ...(cursor ? [Query.cursorAfter(cursor)] : []),
       ]);
 
       for (const userDoc of batch.documents) {
@@ -304,7 +310,7 @@ export async function runFreePlanExpiry(context, { databases, users, resend, now
       }
 
       hasMore = batch.documents.length === BATCH_SIZE;
-      offset += BATCH_SIZE;
+      cursor = batch.documents.at(-1)?.$id ?? null;
     }
   } catch (err) {
     context.error(`Warning job failed: ${err.message}`);
@@ -326,7 +332,7 @@ export async function runFreePlanExpiry(context, { databases, users, resend, now
 
     // The expiry template is resolved per user (language) inside the loop.
 
-    let offset = 0;
+    let cursor = null;
     let hasMore = true;
 
     while (hasMore) {
@@ -335,8 +341,9 @@ export async function runFreePlanExpiry(context, { databases, users, resend, now
         Query.lessThanEqual("planStarted", expiryCutoffISO),
         Query.notEqual("subscriptionStatus", "free_expired"),
         Query.notEqual("subscriptionStatus", "archived"),
+        Query.isNull("deleteMedia"),
         Query.limit(BATCH_SIZE),
-        Query.offset(offset),
+        ...(cursor ? [Query.cursorAfter(cursor)] : []),
       ]);
 
       for (const userDoc of batch.documents) {
@@ -391,7 +398,7 @@ export async function runFreePlanExpiry(context, { databases, users, resend, now
       }
 
       hasMore = batch.documents.length === BATCH_SIZE;
-      offset += BATCH_SIZE;
+      cursor = batch.documents.at(-1)?.$id ?? null;
     }
   } catch (err) {
     context.error(`Expiry job failed: ${err.message}`);

@@ -39,14 +39,20 @@ const databases = {
       const language = parsed.find((q) => q.attribute === "language").values[0];
       return { documents: templateLookup(name, language) };
     }
+    // Like Appwrite: the filters run on the rows as they are now, and a cursor is a position in
+    // the table, so it stays valid when an earlier row no longer matches the filters.
+    const cursor = parsed.find((q) => q.method === "cursorAfter")?.values[0];
+    const start = cursor ? rows.findIndex((row) => row.$id === cursor) + 1 : 0;
     const offset = parsed.find((q) => q.method === "offset")?.values[0] ?? 0;
-    if (offset > 0) return { documents: [] };
-    const isWarningJob = parsed.some((q) => q.method === "isNull" && q.attribute === "freeExpiryWarnedAt");
-    const documents = rows.filter((row) => {
-      if (row.plan !== "free") return false;
-      if (isWarningJob) return !row.freeExpiryWarnedAt;
-      return !["free_expired", "archived"].includes(row.subscriptionStatus) && new Date(row.planStarted) <= new Date(NOW.getTime() - 183 * DAY);
+    const limit = parsed.find((q) => q.method === "limit")?.values[0] ?? 25;
+    const matches = (row) => parsed.every((q) => {
+      if (q.method === "equal") return q.values.includes(row[q.attribute]);
+      if (q.method === "notEqual") return row[q.attribute] != null && !q.values.includes(row[q.attribute]);
+      if (q.method === "isNull") return row[q.attribute] == null;
+      if (q.method === "lessThanEqual") return row[q.attribute] != null && new Date(row[q.attribute]) <= new Date(q.values[0]);
+      return true;
     });
+    const documents = rows.slice(start).filter(matches).slice(offset, offset + limit);
     return { documents: documents.map((row) => ({ ...row })) };
   },
   async updateDocument(db, collection, id, fields) {
@@ -213,5 +219,76 @@ describe("shared module", () => {
   it("is the agreed copy of thebigdaypage/src/lib/resendDelivery.js", () => {
     const source = readFileSync(new URL("../src/resendDelivery.js", import.meta.url));
     assert.equal(createHash("sha256").update(source).digest("hex"), "621f0377d6a16220ba9871ed16af3025cb6539384f8a0714bd6f41ec99a88a0a");
+  });
+});
+
+const daysAhead = (n) => new Date(NOW.getTime() + n * DAY).toISOString();
+
+describe("an account that already has a deletion date", () => {
+  // planStarted is the start of the paid plan: it is older than the free period as soon as a
+  // plan bought half a year ago ends, and the account is on plan "free" from that moment on.
+  const scheduled = (over) => expiryDue({ plan: "free", planStarted: daysAgo(400), freeExpiryWarnedAt: null, ...over });
+
+  it("keeps the 30 days of a full refund instead of moving them to 183", async () => {
+    const date = daysAhead(20);
+    rows = [scheduled({ subscriptionStatus: "refunded", deleteMedia: date, deleteMediaReason: "refunded" })];
+    await runJobs();
+    assert.equal(rows[0].deleteMedia, date);
+    assert.equal(rows[0].subscriptionStatus, "refunded");
+    assert.equal(rows[0].deleteMediaReason, "refunded");
+    assert.equal(sends.length, 0);
+  });
+
+  it("keeps the 30 days of a lost dispute", async () => {
+    const date = daysAhead(25);
+    rows = [scheduled({ subscriptionStatus: "disputed_lost", deleteMedia: date, deleteMediaReason: "disputed_lost" })];
+    await runJobs();
+    assert.equal(rows[0].deleteMedia, date);
+    assert.equal(rows[0].subscriptionStatus, "disputed_lost");
+    assert.equal(sends.length, 0);
+  });
+
+  it("does not move the date of a cancelled subscription forward", async () => {
+    const date = daysAhead(400);
+    rows = [scheduled({ subscriptionStatus: "subscription_nonrenewed", deleteMedia: date, deleteMediaReason: "subscription_nonrenewed" })];
+    await runJobs();
+    assert.equal(rows[0].deleteMedia, date);
+    assert.equal(rows[0].subscriptionStatus, "subscription_nonrenewed");
+    assert.equal(sends.length, 0);
+  });
+
+  it("gets no warning that a free plan is about to expire", async () => {
+    rows = [scheduled({ planStarted: daysAgo(175), subscriptionStatus: "refunded", deleteMedia: daysAhead(20) })];
+    const result = await runJobs();
+    assert.equal(sends.length, 0);
+    assert.equal(rows[0].freeExpiryWarnedAt, null);
+    assert.equal(result.warned, 0);
+  });
+
+  it("an account without a date still expires, also after a subscription ended unnoticed", async () => {
+    rows = [expiryDue({ subscriptionStatus: "canceled", deleteMedia: null })];
+    await runJobs();
+    assert.equal(rows[0].subscriptionStatus, "free_expired");
+    assert.ok(rows[0].deleteMedia);
+  });
+});
+
+describe("a run with more rows than one page", () => {
+  // Expiring and warning take a row out of the query. Counting pages by offset then skips as
+  // many rows as were just handled.
+  const many = (make) => Array.from({ length: 250 }, (_, i) => make({ $id: `row${i}`, userId: `u${i}` }));
+
+  it("expires every due row", async () => {
+    rows = many(expiryDue);
+    const result = await runJobs();
+    assert.equal(result.expired, 250);
+    assert.equal(rows.filter((row) => row.subscriptionStatus === "free_expired").length, 250);
+  });
+
+  it("warns every due row", async () => {
+    rows = many(warningDue);
+    const result = await runJobs();
+    assert.equal(result.warned, 250);
+    assert.equal(rows.filter((row) => row.freeExpiryWarnedAt).length, 250);
   });
 });
